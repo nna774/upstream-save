@@ -67,7 +67,7 @@ pub fn access(viewers: &crate::auth::Tokens, token: Option<&str>) -> Option<Acce
 }
 
 /// CloudFrontがオリジンへのリクエストに付ける秘密のヘッダを照合する。Function URLを直接叩いた閲覧はキャッシュを素通りするので拒む
-pub fn from_origin(secrets: &crate::auth::Tokens, header: Option<&str>) -> bool {
+pub fn verify_origin_secret(secrets: &crate::auth::Tokens, header: Option<&str>) -> bool {
     header.is_some_and(|h| secrets.authenticate(h).is_some())
 }
 
@@ -191,14 +191,14 @@ mod tests {
             r#"{"cloudfront":"2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b"}"#,
         )
         .unwrap();
-        assert!(crate::view::from_origin(&secrets, Some("secret")));
-        assert!(!crate::view::from_origin(&secrets, Some("wrong")));
-        assert!(!crate::view::from_origin(&secrets, Some("")));
-        assert!(!crate::view::from_origin(&secrets, None));
+        assert!(crate::view::verify_origin_secret(&secrets, Some("secret")));
+        assert!(!crate::view::verify_origin_secret(&secrets, Some("wrong")));
+        assert!(!crate::view::verify_origin_secret(&secrets, Some("")));
+        assert!(!crate::view::verify_origin_secret(&secrets, None));
     }
 
     #[test]
-    fn only_anonymous_responses_are_shared() {
+    fn only_anonymous_api_responses_are_shared() {
         assert_eq!(
             crate::view::cache_control(crate::view::Access::Viewer),
             "no-store"

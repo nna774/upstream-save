@@ -69,23 +69,34 @@ async fn handle(
     app: &App,
     req: lambda_http::Request,
 ) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    use lambda_http::RequestExt as _;
     use lambda_http::http::Method;
 
-    // trace.shやiPhoneのショートカットはFunction URLの`/?...`に直接送るので、POSTはパスもオリジンの秘密も見ない
-    if req.method() == Method::POST {
-        return ingest(app, req).await;
-    }
     let origin = req
         .headers()
         .get("x-origin-verify")
         .map(|v| v.to_str().unwrap_or(""));
-    if !upstream_save::view::from_origin(&app.origin_secrets, origin) {
+    let via_cloudfront = upstream_save::view::verify_origin_secret(&app.origin_secrets, origin);
+
+    // trace.shやiPhoneのショートカットはFunction URLの`/?...`に直接送るので、POSTはパスを見ない
+    if req.method() == Method::POST {
+        // CloudFrontはクエリを落とし、source_ipもエッジのアドレスになる
+        if via_cloudfront {
+            return json_response(
+                403,
+                serde_json::json!({"error": "send traces to the Function URL"}),
+            );
+        }
+        return ingest(app, req).await;
+    }
+    if !via_cloudfront {
         return json_response(
             403,
             serde_json::json!({"error": "open the viewer via CloudFront"}),
         );
     }
-    let path = req.uri().path().to_owned();
+    // uri()のパスは`..`が畳まれている。CloudFrontは畳まずにキャッシュキーにするので、別名で一覧を何度も走らせられないよう畳む前のパスで振り分ける
+    let path = req.raw_http_path().to_owned();
     let token = match req.headers().get("x-token") {
         None => None,
         Some(v) => Some(v.to_str().unwrap_or("")),
