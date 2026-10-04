@@ -112,10 +112,10 @@ fn parse_line(rest: &str, acc: &mut HopAcc) -> Option<()> {
             current = None;
         } else if tok.starts_with('!') {
             // `!H`等のICMPエラー注記
-        } else if let Some(v) = tok.strip_suffix("ms").and_then(|n| n.parse::<f64>().ok()) {
+        } else if let Some(v) = tok.strip_suffix("ms").and_then(crate::parse::parse_finite) {
             acc.responders[current?].rtts.push(v);
             probes += 1;
-        } else if let Ok(v) = tok.parse::<f64>()
+        } else if let Some(v) = crate::parse::parse_finite(tok)
             && tokens.get(i + 1) == Some(&"ms")
         {
             acc.responders[current?].rtts.push(v);
