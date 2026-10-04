@@ -32,14 +32,18 @@ curl -X POST -H "x-token: $(cat ~/.config/upstream-save/token)" \
 | `format` | `mtr-json` / `mtr-text` / `traceroute-text`。省略すると本文から推定する |
 | `af` | `4` / `6`。省略すると最初に応答した hop の IP から決める |
 | `label` | 任意のラベル |
-| `target` | 宛先。省略すると本文から拾う |
+| `target` | 宛先。省略すると本文から拾う（mtr のテキストからは拾えない） |
 
 ## 保存されるもの
 
 - `traces/YYYY-MM/<YYYYMMDDTHHMMSSZ>-<client>-v<af>.json`: パースと補完をした結果
 - `raw/YYYY-MM/<同>.txt`: 受け取った本文そのまま。パースに失敗した時もこちらは残る
 
-`<client>` はトークンに対応する名前。
+`<client>` はトークンに対応する名前。ファミリが分からない時（`af` が無く、応答した hop も無い時）は `-v<af>` が付かない。
+同じキーが既にあれば上書きせず 409 を返す。本文は 256KB まで。
+
+`as_path` は hop 順に AS を並べ、連続する同じ AS を畳んだもの。同じ hop に複数の応答元がある時は、AS が分かる最初の応答元だけを使う。
+`lookup_failed` には、RIPEstat への問い合わせがエラーか期限切れで補完できなかった IP が入る。経路広告されていない IP は入らない。
 
 一覧を TSV で見る:
 
