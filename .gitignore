@@ -1,0 +1,5 @@
+/target/
+/.cache/
+.envrc
+terraform/.terraform/
+terraform/*.tfvars
