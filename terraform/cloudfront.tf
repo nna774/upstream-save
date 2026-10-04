@@ -71,6 +71,8 @@ resource "aws_cloudfront_distribution" "viewer" {
   origin {
     origin_id   = "lambda"
     domain_name = trimsuffix(trimprefix(aws_lambda_function_url.api.function_url, "https://"), "/")
+    # 応答が遅い一覧を再試行すると、取り込みと共有する同時実行枠をさらに使う
+    connection_attempts = 1
 
     custom_origin_config {
       http_port              = 80

@@ -22,7 +22,8 @@ resource "aws_lambda_function" "api" {
       BUCKET              = aws_s3_bucket.data.bucket
       TOKEN_HASHES        = jsonencode(var.client_token_hashes)
       VIEWER_TOKEN_HASHES = jsonencode(var.viewer_token_hashes)
-      # 入れ替える時は旧値と新値を並べ、CloudFrontを更新してから旧値を消す
+      # 入れ替える時は、今のハッシュを別の名前でこの対応表に足してから`-replace=random_password.origin_secret`でapplyし、次のapplyで消す。
+      # 同じapplyでLambdaとCloudFrontの反映がずれても403にならない
       ORIGIN_SECRET_HASHES = jsonencode({ cloudfront = sha256(random_password.origin_secret.result) })
     }
   }
