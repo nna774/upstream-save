@@ -4,7 +4,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 bucket=${UPSTREAM_SAVE_BUCKET:-$(terraform -chdir=terraform output -raw bucket)}
-aws s3 sync "s3://$bucket/traces/" .cache/traces/ --only-show-errors
+aws s3 sync --delete "s3://$bucket/traces/" .cache/traces/ --only-show-errors
 
 printf 'ts\tclient\tlabel\taf\ttarget\tas_path\n'
 find .cache/traces -name '*.json' -print0 | sort -z |
