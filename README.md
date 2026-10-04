@@ -113,7 +113,7 @@ terraform apply
 ビューワの DNS は [dark-kuins.net-dns](https://github.com/nna774/dark-kuins.net-dns) の `records.yml` で管理している。
 初めて作る時は、ACM の検証が済むまで CloudFront を作れないので、次の順に進める。
 
-1. `terraform apply -target=aws_acm_certificate.viewer` の後、`terraform output acm_validation_records` を `dark-kuins.net:` の `acm:` に足す
+1. `terraform apply -target=aws_acm_certificate.viewer` の後、`terraform output acm_validation_records` を `dark-kuins.net:` の `acm:` に足す（ゾーンからの相対名で出るので、そのまま貼れる）
 2. `terraform apply`。検証レコードが引けるまで待つ
 3. `terraform output cloudfront_domain` を `dark-kuins.net:` の `cname:` に `upstream-save` として足す
 

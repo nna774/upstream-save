@@ -19,9 +19,10 @@ output "cloudfront_domain" {
   value = aws_cloudfront_distribution.viewer.domain_name
 }
 
-# DNSのrepoに足すACMの検証レコード（CNAME）
+# DNSのrepoのrecords.ymlはゾーンからの相対名で書き、末尾の`.`を付けない
 output "acm_validation_records" {
   value = {
-    for o in aws_acm_certificate.viewer.domain_validation_options : o.resource_record_name => o.resource_record_value
+    for o in aws_acm_certificate.viewer.domain_validation_options :
+    trimsuffix(o.resource_record_name, ".${local.dns_zone}.") => trimsuffix(o.resource_record_value, ".")
   }
 }
