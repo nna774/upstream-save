@@ -1,3 +1,6 @@
+// mtrやtracerouteの出力は数十KB程度。誤送信で巨大な本文をパースしてメモリを使い切らないよう制限する
+const MAX_BODY_BYTES: usize = 256 * 1024;
+
 struct App {
     s3: aws_sdk_s3::Client,
     bucket: String,
@@ -35,6 +38,9 @@ async fn handle(
 ) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
     use lambda_http::RequestExt as _;
 
+    if req.method() != lambda_http::http::Method::POST {
+        return json_response(405, serde_json::json!({"error": "use POST"}));
+    }
     let token = req
         .headers()
         .get("x-token")
@@ -77,6 +83,12 @@ async fn handle(
     };
 
     let raw: &[u8] = req.body().as_ref();
+    if raw.len() > MAX_BODY_BYTES {
+        return json_response(
+            413,
+            serde_json::json!({"error": format!("body must be at most {MAX_BODY_BYTES} bytes")}),
+        );
+    }
     let body = String::from_utf8_lossy(raw);
 
     let now = chrono::Utc::now();
@@ -86,7 +98,7 @@ async fn handle(
     let month = now.format("%Y-%m");
     let raw_key = format!("raw/{month}/{id}.txt");
 
-    if !put_new(app, &raw_key, "text/plain; charset=utf-8", raw.to_vec()).await? {
+    if !put_new(app, &raw_key, "text/plain", raw.to_vec()).await? {
         return json_response(
             409,
             serde_json::json!({"error": "a record with the same key already exists", "raw_key": raw_key}),
@@ -131,11 +143,12 @@ async fn handle(
         "application/json",
         serde_json::to_vec_pretty(&trace)?,
     )
-    .await?
+    .await
+    .inspect_err(|e| tracing::error!(error = ?e, %raw_key, "failed to store trace"))?
     {
         return json_response(
             409,
-            serde_json::json!({"error": "a record with the same key already exists", "key": key}),
+            serde_json::json!({"error": "a record with the same key already exists", "key": key, "raw_key": raw_key}),
         );
     }
 
@@ -145,7 +158,7 @@ async fn handle(
             "key": key,
             "raw_key": raw_key,
             "format": trace.format,
-            "hop_count": trace.hops.len(),
+            "hop_count": trace.hops.iter().map(|h| h.hop).collect::<std::collections::BTreeSet<_>>().len(),
             "as_path": trace.as_path,
             "source": trace.source,
             "lookup_failed": trace.lookup_failed,
