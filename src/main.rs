@@ -5,6 +5,7 @@ struct App {
     s3: aws_sdk_s3::Client,
     bucket: String,
     tokens: upstream_save::auth::Tokens,
+    viewers: upstream_save::auth::Tokens,
     ripestat: upstream_save::enrich::Client,
 }
 
@@ -16,6 +17,7 @@ async fn main() -> Result<(), lambda_http::Error> {
         s3: aws_sdk_s3::Client::new(&config),
         bucket: std::env::var("BUCKET")?,
         tokens: upstream_save::auth::Tokens::from_json(&std::env::var("TOKEN_HASHES")?)?,
+        viewers: upstream_save::auth::Tokens::from_json(&std::env::var("VIEWER_TOKEN_HASHES")?)?,
         ripestat: upstream_save::enrich::Client::new(),
     };
     let app = &app;
@@ -29,18 +31,249 @@ fn json_response(
     Ok(lambda_http::Response::builder()
         .status(status)
         .header("content-type", "application/json")
+        .header("cache-control", "no-store")
         .body(lambda_http::Body::from(body.to_string()))?)
+}
+
+const VIEWER_HTML: &str = include_str!("../viewer/index.html");
+const VIEWER_JS: &str = include_str!("../viewer/viewer.js");
+// CSSはindex.htmlに埋め込む。Lambdaの同時実行数を絞っているので、ページの読み込みで並行するリクエストを減らす
+const VIEWER_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+fn static_response(
+    content_type: &str,
+    body: &'static str,
+) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    Ok(lambda_http::Response::builder()
+        .status(200)
+        .header("content-type", content_type)
+        .header("cache-control", "no-cache")
+        .header("content-security-policy", VIEWER_CSP)
+        .header("x-content-type-options", "nosniff")
+        .body(lambda_http::Body::from(body))?)
 }
 
 async fn handle(
     app: &App,
     req: lambda_http::Request,
 ) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    use lambda_http::http::Method;
+
+    // trace.shやiPhoneのショートカットは`/?...`に送るので、POSTはパスを見ない
+    if req.method() == Method::POST {
+        return ingest(app, req).await;
+    }
+    let path = req.uri().path().to_owned();
+    let token = match req.headers().get("x-token") {
+        None => None,
+        Some(v) => Some(v.to_str().unwrap_or("")),
+    };
+    let access = upstream_save::view::access(&app.viewers, token);
+
+    match (req.method(), path.as_str()) {
+        (&Method::GET, "/") => return static_response("text/html; charset=utf-8", VIEWER_HTML),
+        (&Method::GET, "/viewer.js") => {
+            return static_response("text/javascript; charset=utf-8", VIEWER_JS);
+        }
+        (_, "/" | "/viewer.js") => {
+            return json_response(405, serde_json::json!({"error": "method not allowed"}));
+        }
+        (&Method::GET, "/api/traces") => {
+            let Some(access) = access else {
+                return unauthorized();
+            };
+            return list_traces(app, access).await;
+        }
+        _ => {}
+    }
+
+    let Some(rest) = path.strip_prefix("/api/traces/") else {
+        return not_found();
+    };
+    if let Some(r) = rest.strip_suffix("/public") {
+        let Some(r) = upstream_save::view::TraceRef::parse(r) else {
+            return not_found();
+        };
+        let public = match *req.method() {
+            Method::PUT => true,
+            Method::DELETE => false,
+            _ => return json_response(405, serde_json::json!({"error": "use PUT or DELETE"})),
+        };
+        if access != Some(upstream_save::view::Access::Viewer) {
+            return unauthorized();
+        }
+        return set_public(app, &r, public).await;
+    }
+    let Some(r) = upstream_save::view::TraceRef::parse(rest) else {
+        return not_found();
+    };
+    if req.method() != Method::GET {
+        return json_response(405, serde_json::json!({"error": "use GET"}));
+    }
+    let Some(access) = access else {
+        return unauthorized();
+    };
+    get_trace(app, &r, access).await
+}
+
+fn unauthorized() -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    json_response(401, serde_json::json!({"error": "unauthorized"}))
+}
+
+fn not_found() -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    json_response(404, serde_json::json!({"error": "not found"}))
+}
+
+async fn list_traces(
+    app: &App,
+    access: upstream_save::view::Access,
+) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    use futures::StreamExt as _;
+
+    let public: std::collections::HashSet<_> = list_keys(app, "public/")
+        .await?
+        .iter()
+        .filter_map(|k| upstream_save::view::TraceRef::from_public_key(k))
+        .collect();
+    let refs: Vec<_> = match access {
+        upstream_save::view::Access::Viewer => list_keys(app, "traces/")
+            .await?
+            .iter()
+            .filter_map(|k| upstream_save::view::TraceRef::from_trace_key(k))
+            .collect(),
+        upstream_save::view::Access::Anonymous => public.iter().cloned().collect(),
+    };
+
+    let mut stream = futures::stream::iter(refs)
+        .map(|r| async move {
+            let body = get_object(app, &r.trace_key()).await;
+            (r, body)
+        })
+        .buffer_unordered(MAX_CONCURRENT_GETS);
+    let mut summaries = Vec::new();
+    while let Some((r, body)) = stream.next().await {
+        let Some(body) = body? else {
+            continue;
+        };
+        match serde_json::from_slice::<upstream_save::model::Trace>(&body) {
+            Ok(trace) => {
+                let is_public = public.contains(&r);
+                summaries.push(upstream_save::view::Summary::new(r, trace, is_public));
+            }
+            Err(e) => tracing::warn!(error = %e, key = %r, "skipping unreadable trace"),
+        }
+    }
+    summaries.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.key.cmp(&a.key)));
+    json_response(200, serde_json::to_value(summaries)?)
+}
+
+const MAX_CONCURRENT_GETS: usize = 16;
+
+async fn get_trace(
+    app: &App,
+    r: &upstream_save::view::TraceRef,
+    access: upstream_save::view::Access,
+) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    let public = exists(app, &r.public_key()).await?;
+    if access == upstream_save::view::Access::Anonymous && !public {
+        return not_found();
+    }
+    let Some(body) = get_object(app, &r.trace_key()).await? else {
+        return not_found();
+    };
+    let trace: upstream_save::model::Trace = serde_json::from_slice(&body)?;
+    let mut value = serde_json::to_value(trace)?;
+    value["key"] = serde_json::json!(r);
+    value["public"] = serde_json::json!(public);
+    json_response(200, value)
+}
+
+async fn set_public(
+    app: &App,
+    r: &upstream_save::view::TraceRef,
+    public: bool,
+) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    if !exists(app, &r.trace_key()).await? {
+        return not_found();
+    }
+    let key = r.public_key();
+    if public {
+        app.s3
+            .put_object()
+            .bucket(&app.bucket)
+            .key(&key)
+            .body(Vec::new().into())
+            .send()
+            .await?;
+    } else {
+        app.s3
+            .delete_object()
+            .bucket(&app.bucket)
+            .key(&key)
+            .send()
+            .await?;
+    }
+    json_response(200, serde_json::json!({"key": r, "public": public}))
+}
+
+async fn list_keys(app: &App, prefix: &str) -> Result<Vec<String>, lambda_http::Error> {
+    let mut pages = app
+        .s3
+        .list_objects_v2()
+        .bucket(&app.bucket)
+        .prefix(prefix)
+        .into_paginator()
+        .send();
+    let mut keys = Vec::new();
+    while let Some(page) = pages.next().await {
+        keys.extend(
+            page?
+                .contents()
+                .iter()
+                .filter_map(|o| o.key().map(str::to_owned)),
+        );
+    }
+    Ok(keys)
+}
+
+/// オブジェクトが無ければ`None`を返す
+async fn get_object(app: &App, key: &str) -> Result<Option<Vec<u8>>, lambda_http::Error> {
+    let out = match app
+        .s3
+        .get_object()
+        .bucket(&app.bucket)
+        .key(key)
+        .send()
+        .await
+    {
+        Ok(out) => out,
+        Err(e) if e.as_service_error().is_some_and(|e| e.is_no_such_key()) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    Ok(Some(out.body.collect().await?.into_bytes().to_vec()))
+}
+
+async fn exists(app: &App, key: &str) -> Result<bool, lambda_http::Error> {
+    match app
+        .s3
+        .head_object()
+        .bucket(&app.bucket)
+        .key(key)
+        .send()
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(e) if e.as_service_error().is_some_and(|e| e.is_not_found()) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn ingest(
+    app: &App,
+    req: lambda_http::Request,
+) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
     use lambda_http::RequestExt as _;
 
-    if req.method() != lambda_http::http::Method::POST {
-        return json_response(405, serde_json::json!({"error": "use POST"}));
-    }
     let token = req
         .headers()
         .get("x-token")
@@ -158,7 +391,7 @@ async fn handle(
             "key": key,
             "raw_key": raw_key,
             "format": trace.format,
-            "hop_count": trace.hops.iter().map(|h| h.hop).collect::<std::collections::BTreeSet<_>>().len(),
+            "hop_count": upstream_save::view::hop_count(&trace.hops),
             "as_path": trace.as_path,
             "source": trace.source,
             "lookup_failed": trace.lookup_failed,
