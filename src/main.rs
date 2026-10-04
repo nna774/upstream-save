@@ -105,11 +105,11 @@ async fn handle(
     };
 
     let mut hops = parsed.hops;
-    let infos = app
+    let lookups = app
         .ripestat
         .lookup_all(hops.iter().filter_map(|h| h.ip).chain(source_ip))
         .await;
-    upstream_save::enrich::apply(&mut hops, &infos);
+    upstream_save::enrich::apply(&mut hops, &lookups.infos);
 
     let trace = upstream_save::model::Trace {
         ts: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -118,8 +118,9 @@ async fn handle(
         target: query.first("target").map(str::to_owned).or(parsed.target),
         af,
         source_ip,
-        source: source_ip.and_then(|ip| infos.get(&ip).cloned()),
+        source: source_ip.and_then(|ip| lookups.infos.get(&ip).cloned()),
         as_path: upstream_save::aspath::as_path(&hops),
+        lookup_failed: lookups.failed,
         format: parsed.format,
         hops,
     };
@@ -147,6 +148,7 @@ async fn handle(
             "hop_count": trace.hops.len(),
             "as_path": trace.as_path,
             "source": trace.source,
+            "lookup_failed": trace.lookup_failed,
         }),
     )
 }

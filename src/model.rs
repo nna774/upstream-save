@@ -79,6 +79,9 @@ pub struct Trace {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<AsInfo>,
     pub as_path: Vec<String>,
+    /// RIPEstatでの補完に失敗したアドレス
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lookup_failed: Vec<std::net::IpAddr>,
     pub format: Format,
     pub hops: Vec<Hop>,
 }

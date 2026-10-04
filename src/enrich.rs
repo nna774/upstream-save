@@ -93,15 +93,23 @@ pub fn parse_prefix_overview(
 
 pub struct Client {
     http: reqwest::Client,
+    url: String,
 }
 
 impl Client {
     pub fn new() -> Self {
+        Self::with_url(RIPESTAT_URL)
+    }
+
+    pub fn with_url(url: &str) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("reqwest client");
-        Self { http }
+        Self {
+            http,
+            url: url.to_owned(),
+        }
     }
 
     async fn lookup(
@@ -110,7 +118,7 @@ impl Client {
     ) -> Result<Option<crate::model::AsInfo>, Box<dyn std::error::Error + Send + Sync>> {
         let body = self
             .http
-            .get(RIPESTAT_URL)
+            .get(&self.url)
             .query(&[
                 ("resource", ip.to_string().as_str()),
                 ("sourceapp", "upstream-save"),
@@ -123,22 +131,46 @@ impl Client {
         Ok(parse_prefix_overview(&body)?)
     }
 
-    /// グローバルなアドレスだけを並列に引く。失敗したアドレスと期限までに終わらなかったアドレスは結果から外す
-    pub async fn lookup_all(
+    /// 一時的なエラーで補完が欠けないよう、失敗したら1回だけやり直す
+    async fn lookup_with_retry(
         &self,
-        ips: impl IntoIterator<Item = std::net::IpAddr>,
-    ) -> std::collections::HashMap<std::net::IpAddr, crate::model::AsInfo> {
+        ip: std::net::IpAddr,
+    ) -> Result<Option<crate::model::AsInfo>, Box<dyn std::error::Error + Send + Sync>> {
+        match self.lookup(ip).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                tracing::warn!(%ip, error = %e, "RIPEstat lookup failed, retrying");
+                self.lookup(ip).await
+            }
+        }
+    }
+
+    /// グローバルなアドレスだけを並列に引く
+    pub async fn lookup_all(&self, ips: impl IntoIterator<Item = std::net::IpAddr>) -> Lookups {
         use futures::StreamExt as _;
-        let unique: std::collections::HashSet<std::net::IpAddr> =
+        let unique: std::collections::BTreeSet<std::net::IpAddr> =
             ips.into_iter().filter(|ip| is_global(*ip)).collect();
         let deadline = tokio::time::Instant::now() + LOOKUP_DEADLINE;
-        let mut stream = futures::stream::iter(unique)
-            .map(|ip| async move { (ip, self.lookup(ip).await) })
+        let mut stream = futures::stream::iter(unique.iter().copied())
+            .map(|ip| async move { (ip, self.lookup_with_retry(ip).await) })
             .buffer_unordered(MAX_CONCURRENT_LOOKUPS);
-        let mut results = Vec::new();
+        let mut lookups = Lookups::default();
+        let mut done = std::collections::HashSet::new();
         loop {
             match tokio::time::timeout_at(deadline, stream.next()).await {
-                Ok(Some(r)) => results.push(r),
+                Ok(Some((ip, result))) => {
+                    done.insert(ip);
+                    match result {
+                        Ok(Some(info)) => {
+                            lookups.infos.insert(ip, info);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(%ip, error = %e, "RIPEstat lookup failed");
+                            lookups.failed.push(ip);
+                        }
+                    }
+                }
                 Ok(None) => break,
                 Err(_) => {
                     tracing::warn!("RIPEstat lookups hit the deadline");
@@ -146,17 +178,19 @@ impl Client {
                 }
             }
         }
-        results
-            .into_iter()
-            .filter_map(|(ip, r)| match r {
-                Ok(info) => info.map(|i| (ip, i)),
-                Err(e) => {
-                    tracing::warn!(%ip, error = %e, "RIPEstat lookup failed");
-                    None
-                }
-            })
-            .collect()
+        lookups
+            .failed
+            .extend(unique.iter().filter(|ip| !done.contains(*ip)));
+        lookups.failed.sort();
+        lookups
     }
+}
+
+/// `failed`は、エラーか期限切れで補完できなかったアドレス。経路広告されていないアドレスは含まない
+#[derive(Debug, Default)]
+pub struct Lookups {
+    pub infos: std::collections::HashMap<std::net::IpAddr, crate::model::AsInfo>,
+    pub failed: Vec<std::net::IpAddr>,
 }
 
 impl Default for Client {
@@ -248,6 +282,23 @@ mod tests {
     fn prefix_overview_not_announced() {
         let body = br#"{"data":{"asns":[],"resource":"10.60.84.249","announced":false}}"#;
         assert_eq!(crate::enrich::parse_prefix_overview(body).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn failed_lookups_are_reported() {
+        // 誰も待ち受けていないポートなので接続に失敗する
+        let client = crate::enrich::Client::with_url("http://127.0.0.1:9/");
+        let ips: Vec<std::net::IpAddr> = vec![
+            "1.1.1.1".parse().unwrap(),
+            "10.0.0.1".parse().unwrap(),
+            "1.1.1.1".parse().unwrap(),
+        ];
+        let lookups = client.lookup_all(ips).await;
+        assert!(lookups.infos.is_empty());
+        assert_eq!(
+            lookups.failed,
+            vec!["1.1.1.1".parse::<std::net::IpAddr>().unwrap()]
+        );
     }
 
     #[test]
