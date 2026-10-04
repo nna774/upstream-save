@@ -54,6 +54,11 @@ pub fn parse_hop_number(s: &str) -> Option<u32> {
     s.parse().ok().filter(|n| (1..=255).contains(n))
 }
 
+/// JSONに書けない`NaN`や`inf`は受け付けない
+pub fn parse_finite(s: &str) -> Option<f64> {
+    s.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
 /// 空白で区切られた応答元の欄を読む。`ip`・`name`・`name (ip)`・`???`だけを受け付け、それ以外は`None`
 pub fn parse_responder(tokens: &[&str]) -> Option<(Option<std::net::IpAddr>, Option<String>)> {
     let (ip, host) = match tokens {
@@ -104,6 +109,14 @@ pub fn split_host(s: &str) -> (Option<std::net::IpAddr>, Option<String>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn parse_finite_rejects_non_finite() {
+        assert_eq!(crate::parse::parse_finite("1.5"), Some(1.5));
+        for s in ["NaN", "inf", "-inf", "infinity", "x"] {
+            assert_eq!(crate::parse::parse_finite(s), None, "{s}");
+        }
+    }
+
     #[test]
     fn split_host_variants() {
         assert_eq!(crate::parse::split_host("???"), (None, None));

@@ -79,9 +79,9 @@ fn parse_hop(hop: u32, rest: &str) -> Option<crate::model::Hop> {
         return None;
     }
     let (head, nums) = tokens.split_at(tokens.len() - 7);
-    let num = |i: usize| nums[i].parse::<f64>().ok();
+    let num = |i: usize| crate::parse::parse_finite(nums[i]);
     let stats = crate::model::Stats {
-        loss: nums[0].trim_end_matches('%').parse().ok()?,
+        loss: crate::parse::parse_finite(nums[0].trim_end_matches('%'))?,
         snt: nums[1].parse().ok()?,
         last: num(2)?,
         avg: num(3)?,

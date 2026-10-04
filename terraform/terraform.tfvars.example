@@ -2,3 +2,8 @@
 client_token_hashes = {
   # mbp = "0123...(64桁)"
 }
+
+# 閲覧用。送信用とは別のトークンを作る
+viewer_token_hashes = {
+  # me = "0123...(64桁)"
+}

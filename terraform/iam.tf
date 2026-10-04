@@ -26,6 +26,25 @@ data "aws_iam_policy_document" "lambda" {
       "${aws_s3_bucket.data.arn}/raw/*",
     ]
   }
+
+  # ListBucketが無いと、無いキーのGetObjectが404ではなく403になる
+  statement {
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.data.arn]
+  }
+
+  statement {
+    actions = ["s3:GetObject"]
+    resources = [
+      "${aws_s3_bucket.data.arn}/traces/*",
+      "${aws_s3_bucket.data.arn}/public/*",
+    ]
+  }
+
+  statement {
+    actions   = ["s3:PutObject", "s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.data.arn}/public/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "lambda" {
