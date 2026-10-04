@@ -122,15 +122,15 @@ fn parse_line(rest: &str, acc: &mut HopAcc) -> Option<()> {
             probes += 1;
             i += 1;
         } else {
-            let mut host = tok.to_owned();
+            let mut responder = vec![tok];
             if let Some(next) = tokens.get(i + 1)
                 && next.starts_with('(')
                 && next.ends_with(')')
             {
-                host = format!("{tok} {next}");
+                responder.push(next);
                 i += 1;
             }
-            let (ip, name) = crate::parse::split_host(&host);
+            let (ip, name) = crate::parse::parse_responder(&responder)?;
             current = Some(acc.responder(ip, name));
         }
         i += 1;
@@ -239,6 +239,10 @@ mod tests {
     #[test]
     fn unrelated_text_is_error() {
         assert!(crate::parse::traceroute_text::parse("2026 some unrelated text\n").is_err());
+        assert!(
+            crate::parse::traceroute_text::parse(" 1  10.0.0.1  1.0 ms\n    unrelated text *\n")
+                .is_err()
+        );
     }
 
     #[test]

@@ -21,11 +21,17 @@ pub fn parse(body: &str) -> Result<crate::model::Parsed, crate::parse::Error> {
         } else if let Some(prev) = hops.last()
             && let Some(c) = CONTINUATION_LINE.captures(line)
             && let Some(extra) = parse_continuation(prev.hop, &c[1])
-            && !hops
-                .iter()
-                .any(|h| h.hop == extra.hop && h.ip == extra.ip && h.host == extra.host)
         {
-            hops.push(extra);
+            // mtrは同じ応答元を、ASN無しの行とASN付きの行で2回出すことがある
+            match hops
+                .iter_mut()
+                .find(|h| h.hop == extra.hop && h.ip == extra.ip && h.host == extra.host)
+            {
+                Some(existing) => {
+                    existing.asn_reported = existing.asn_reported.or(extra.asn_reported)
+                }
+                None => hops.push(extra),
+            }
         }
     }
     Ok(crate::model::Parsed {
@@ -41,7 +47,7 @@ fn parse_continuation(hop: u32, rest: &str) -> Option<crate::model::Hop> {
     }
     let tokens: Vec<&str> = rest.split_whitespace().collect();
     let (asn_reported, tokens) = split_asn(&tokens);
-    let (ip, host) = crate::parse::split_host(&tokens.join(" "));
+    let (ip, host) = crate::parse::parse_responder(tokens)?;
     if ip.is_none() && host.is_none() {
         return None;
     }
@@ -86,7 +92,7 @@ fn parse_hop(hop: u32, rest: &str) -> Option<crate::model::Hop> {
         stdev: num(6)?,
     };
     let (asn_reported, head) = split_asn(head);
-    let (ip, host) = crate::parse::split_host(&head.join(" "));
+    let (ip, host) = crate::parse::parse_responder(head)?;
     Some(crate::model::Hop {
         hop,
         ip,
@@ -165,6 +171,26 @@ mod tests {
             ]
         );
         assert!(p.hops[1].stats.is_none());
+    }
+
+    #[test]
+    fn duplicate_continuation_fills_asn() {
+        let body = " 1. AS2516 gateway.example 0.0% 3 1 1 1 1 0\n        other.example\n     AS13335 other.example\n";
+        let p = crate::parse::mtr_text::parse(body).unwrap();
+        assert_eq!(p.hops.len(), 2);
+        assert_eq!(p.hops[1].host.as_deref(), Some("other.example"));
+        assert_eq!(p.hops[1].asn_reported, Some(13335));
+    }
+
+    #[test]
+    fn ipinfo_other_than_asn_is_error() {
+        assert!(crate::parse::mtr_text::parse(" 1. US 1.1.1.1 0.0% 3 1 1 1 1 0\n").is_err());
+    }
+
+    #[test]
+    fn indented_header_after_hop_is_ignored() {
+        let body = " 1. 1.1.1.1 0.0% 3 1 1 1 1 0\n  Start: 2026-10-04T19:48:00+0900\n  HOST: 29-er.local Loss% Snt Last Avg Best Wrst StDev\n";
+        assert_eq!(crate::parse::mtr_text::parse(body).unwrap().hops.len(), 1);
     }
 
     #[test]

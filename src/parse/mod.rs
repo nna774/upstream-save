@@ -54,6 +54,27 @@ pub fn parse_hop_number(s: &str) -> Option<u32> {
     s.parse().ok().filter(|n| (1..=255).contains(n))
 }
 
+/// 空白で区切られた応答元の欄を読む。`ip`・`name`・`name (ip)`・`???`だけを受け付け、それ以外は`None`
+pub fn parse_responder(tokens: &[&str]) -> Option<(Option<std::net::IpAddr>, Option<String>)> {
+    let (ip, host) = match tokens {
+        [one] => split_host(one),
+        [_, paren] if paren.starts_with('(') => split_host(&tokens.join(" ")),
+        _ => return None,
+    };
+    match (&ip, &host) {
+        (None, Some(name)) if !looks_like_hostname(name) => None,
+        (Some(_), Some(name)) if !looks_like_hostname(name) => None,
+        _ => Some((ip, host)),
+    }
+}
+
+// ドットを含まない名前も逆引きとしてはありうるが、無関係な文章の単語と区別できないので受け付けない
+fn looks_like_hostname(s: &str) -> bool {
+    s.contains('.')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
 /// mtrやtracerouteのホスト欄を`(ip, 逆引き名)`に分ける。`name (ip)`・IPのみ・名前のみ・`???`を受け付ける
 pub fn split_host(s: &str) -> (Option<std::net::IpAddr>, Option<String>) {
     let s = s.trim();
@@ -92,6 +113,15 @@ mod tests {
             crate::parse::split_host("6otejin301.int-gw.kddi.ne.jp"),
             (None, Some("6otejin301.int-gw.kddi.ne.jp".into()))
         );
+    }
+
+    #[test]
+    fn parse_responder_rejects_non_host() {
+        assert_eq!(crate::parse::parse_responder(&["???"]), Some((None, None)));
+        assert!(crate::parse::parse_responder(&["US", "1.1.1.1"]).is_none());
+        assert!(crate::parse::parse_responder(&["unrelated"]).is_none());
+        assert!(crate::parse::parse_responder(&["Start:"]).is_none());
+        assert!(crate::parse::parse_responder(&["a.example", "(1.1.1.1)"]).is_some());
     }
 
     #[test]
