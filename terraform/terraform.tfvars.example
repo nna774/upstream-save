@@ -1,4 +1,4 @@
-# tools/new-token.sh <name> の出力を貼る
+# tools/new-token.sh <name> <token-file> の出力を貼る
 client_token_hashes = {
   # mbp = "0123...(64桁)"
 }

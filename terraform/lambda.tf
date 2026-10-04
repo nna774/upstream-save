@@ -14,6 +14,8 @@ resource "aws_lambda_function" "api" {
   # RIPEstatへの問い合わせを含むので、既定の3秒では足りない
   timeout     = 30
   memory_size = 128
+  # Function URLは認証NONEで誰でも起動できるので、アカウント共有の同時実行枠を食い潰されないよう絞る
+  reserved_concurrent_executions = 2
 
   environment {
     variables = {

@@ -21,4 +21,14 @@ variable "client_token_hashes" {
     condition     = alltrue([for h in values(var.client_token_hashes) : can(regex("^[0-9a-f]{64}$", h))])
     error_message = "値はSHA-256の小文字hex(64桁)で書く"
   }
+
+  validation {
+    condition     = !contains(values(var.client_token_hashes), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    error_message = "空文字列のSHA-256は登録できない"
+  }
+
+  validation {
+    condition     = length(distinct(values(var.client_token_hashes))) == length(var.client_token_hashes)
+    error_message = "同じハッシュを複数のクライアント名に登録できない"
+  }
 }
