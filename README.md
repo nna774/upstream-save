@@ -53,13 +53,23 @@ tools/list-traces.sh
 
 ## ビューワ
 
-Function URL をブラウザで開くと、記録の一覧・hop の詳細・label と af ごとの AS path の比較が見られる。
+https://upstream-save.dark-kuins.net/ を開くと、記録の一覧・hop の詳細・label と af ごとの AS path の比較が見られる。
+前段の CloudFront を通さない閲覧は Lambda が 403 で拒む。Function URL は記録を送る POST 専用である。
 
 - 画面右上に閲覧用トークンを貼ると、すべての記録が見える。トークンはブラウザの localStorage に残る
 - 詳細画面の「公開する」で、その記録をトークン無しでも見られるようにする。公開した記録は source_ip や client 名も含めてそのまま見える
 - トークン無しで開くと、公開した記録だけが見える
 
 公開状態は `public/YYYY-MM/<同>` の空のオブジェクトで持つ。
+
+トークン無しの応答と `/`・`/viewer.js` は CloudFront に1日残る（ブラウザには残らない）。
+記録を足したり公開したりしても、トークン無しの人には最大1日見えない。トークン付きの API 応答はキャッシュされない。
+デプロイした時と、公開をやめた時は invalidation する:
+
+```sh
+cd terraform
+aws cloudfront create-invalidation --distribution-id "$(terraform output -raw distribution_id)" --paths '/*'
+```
 
 閲覧の API:
 
@@ -99,6 +109,13 @@ cd terraform
 terraform init
 terraform apply
 ```
+
+ビューワの DNS は [dark-kuins.net-dns](https://github.com/nna774/dark-kuins.net-dns) の `records.yml` で管理している。
+初めて作る時は、ACM の検証が済むまで CloudFront を作れないので、次の順に進める。
+
+1. `terraform apply -target=aws_acm_certificate.viewer` の後、`terraform output acm_validation_records` を `dark-kuins.net:` の `acm:` に足す
+2. `terraform apply`。検証レコードが引けるまで待つ
+3. `terraform output cloudfront_domain` を `dark-kuins.net:` の `cname:` に `upstream-save` として足す
 
 ## ライセンス
 
