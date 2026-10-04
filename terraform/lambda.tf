@@ -19,8 +19,9 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      BUCKET       = aws_s3_bucket.data.bucket
-      TOKEN_HASHES = jsonencode(var.client_token_hashes)
+      BUCKET              = aws_s3_bucket.data.bucket
+      TOKEN_HASHES        = jsonencode(var.client_token_hashes)
+      VIEWER_TOKEN_HASHES = jsonencode(var.viewer_token_hashes)
     }
   }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# 使い方: new-token.sh <client-name> <token-file>
+# 使い方: new-token.sh <name> <token-file>
 # トークンを<token-file>に書き、terraform.tfvarsに足す行を表示する。トークン自体は表示しない
+# 送信用はclient_token_hashesに、閲覧用はviewer_token_hashesに足す
 set -euo pipefail
 
 name=${1:?usage: new-token.sh <client-name> <token-file>}
@@ -19,5 +20,5 @@ token=$(openssl rand -hex 32)
 (umask 077 && printf '%s' "$token" >"$file")
 hash=$(printf '%s' "$token" | shasum -a 256 | cut -d' ' -f1)
 echo "wrote token to $file"
-echo "add to terraform/terraform.tfvars client_token_hashes:"
+echo "add to terraform/terraform.tfvars client_token_hashes (sender) or viewer_token_hashes (viewer):"
 echo "  \"$name\" = \"$hash\""

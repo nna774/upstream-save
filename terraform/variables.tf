@@ -32,3 +32,29 @@ variable "client_token_hashes" {
     error_message = "同じハッシュを複数のクライアント名に登録できない"
   }
 }
+
+variable "viewer_token_hashes" {
+  description = "閲覧用トークンの名前からSHA-256 hexへの対応。tools/new-token.shで生成する。非公開の記録を読み、公開状態を変えられる"
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for h in values(var.viewer_token_hashes) : can(regex("^[0-9a-f]{64}$", h))])
+    error_message = "値はSHA-256の小文字hex(64桁)で書く"
+  }
+
+  validation {
+    condition     = !contains(values(var.viewer_token_hashes), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    error_message = "空文字列のSHA-256は登録できない"
+  }
+
+  validation {
+    condition     = length(distinct(values(var.viewer_token_hashes))) == length(var.viewer_token_hashes)
+    error_message = "同じハッシュを複数の名前に登録できない"
+  }
+
+  validation {
+    condition     = length(setintersection(toset(values(var.viewer_token_hashes)), toset(values(var.client_token_hashes)))) == 0
+    error_message = "送信用と同じトークンを閲覧用に登録できない"
+  }
+}
