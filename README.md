@@ -51,6 +51,26 @@ curl -X POST -H "x-token: $(cat ~/.config/upstream-save/token)" \
 tools/list-traces.sh
 ```
 
+## ビューワ
+
+Function URL をブラウザで開くと、記録の一覧・hop の詳細・label と af ごとの AS path の比較が見られる。
+
+- 画面右上に閲覧用トークンを貼ると、すべての記録が見える。トークンはブラウザの localStorage に残る
+- 詳細画面の「公開する」で、その記録をトークン無しでも見られるようにする。公開した記録は source_ip や client 名も含めてそのまま見える
+- トークン無しで開くと、公開した記録だけが見える
+
+公開状態は `public/YYYY-MM/<同>` の空のオブジェクトで持つ。
+
+閲覧の API:
+
+| メソッド・パス | 内容 |
+| --- | --- |
+| `GET /api/traces` | 要約の一覧。トークン無しなら公開分だけ |
+| `GET /api/traces/YYYY-MM/<id>` | 記録1件 |
+| `PUT` / `DELETE /api/traces/YYYY-MM/<id>/public` | 公開する / やめる。閲覧用トークンが要る |
+
+閲覧用トークンでは記録を送れず、送信用トークンでは非公開の記録を読めない。
+
 ## トークンの追加
 
 ```sh
@@ -58,6 +78,7 @@ tools/new-token.sh <client-name> ~/.config/upstream-save/token
 ```
 
 表示された行を `terraform/terraform.tfvars` の `client_token_hashes` に足して apply する。
+閲覧用は、別のファイルに作って `viewer_token_hashes` に足す。
 Lambda にはトークンの SHA-256 だけを渡す。
 
 ## 開発
