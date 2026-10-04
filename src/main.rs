@@ -6,6 +6,7 @@ struct App {
     bucket: String,
     tokens: upstream_save::auth::Tokens,
     viewers: upstream_save::auth::Tokens,
+    origin_secrets: upstream_save::auth::Tokens,
     ripestat: upstream_save::enrich::Client,
 }
 
@@ -18,6 +19,9 @@ async fn main() -> Result<(), lambda_http::Error> {
         bucket: std::env::var("BUCKET")?,
         tokens: upstream_save::auth::Tokens::from_json(&std::env::var("TOKEN_HASHES")?)?,
         viewers: upstream_save::auth::Tokens::from_json(&std::env::var("VIEWER_TOKEN_HASHES")?)?,
+        origin_secrets: upstream_save::auth::Tokens::from_json(&std::env::var(
+            "ORIGIN_SECRET_HASHES",
+        )?)?,
         ripestat: upstream_save::enrich::Client::new(),
     };
     let app = &app;
@@ -28,10 +32,18 @@ fn json_response(
     status: u16,
     body: serde_json::Value,
 ) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    json_response_with_cache(status, body, "no-store")
+}
+
+fn json_response_with_cache(
+    status: u16,
+    body: serde_json::Value,
+    cache_control: &str,
+) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
     Ok(lambda_http::Response::builder()
         .status(status)
         .header("content-type", "application/json")
-        .header("cache-control", "no-store")
+        .header("cache-control", cache_control)
         .body(lambda_http::Body::from(body.to_string()))?)
 }
 
@@ -47,7 +59,7 @@ fn static_response(
     Ok(lambda_http::Response::builder()
         .status(200)
         .header("content-type", content_type)
-        .header("cache-control", "no-cache")
+        .header("cache-control", upstream_save::view::SHARED_CACHE)
         .header("content-security-policy", VIEWER_CSP)
         .header("x-content-type-options", "nosniff")
         .body(lambda_http::Body::from(body))?)
@@ -57,13 +69,34 @@ async fn handle(
     app: &App,
     req: lambda_http::Request,
 ) -> Result<lambda_http::Response<lambda_http::Body>, lambda_http::Error> {
+    use lambda_http::RequestExt as _;
     use lambda_http::http::Method;
 
-    // trace.shやiPhoneのショートカットは`/?...`に送るので、POSTはパスを見ない
+    let origin = req
+        .headers()
+        .get("x-origin-verify")
+        .map(|v| v.to_str().unwrap_or(""));
+    let via_cloudfront = upstream_save::view::verify_origin_secret(&app.origin_secrets, origin);
+
+    // trace.shやiPhoneのショートカットはFunction URLの`/?...`に直接送るので、POSTはパスを見ない
     if req.method() == Method::POST {
+        // CloudFrontはクエリを落とし、source_ipもエッジのアドレスになる
+        if via_cloudfront {
+            return json_response(
+                403,
+                serde_json::json!({"error": "send traces to the Function URL"}),
+            );
+        }
         return ingest(app, req).await;
     }
-    let path = req.uri().path().to_owned();
+    if !via_cloudfront {
+        return json_response(
+            403,
+            serde_json::json!({"error": "open the viewer via CloudFront"}),
+        );
+    }
+    // uri()のパスは`..`が畳まれている。CloudFrontは畳まずにキャッシュキーにするので、別名で一覧を何度も走らせられないよう畳む前のパスで振り分ける
+    let path = req.raw_http_path().to_owned();
     let token = match req.headers().get("x-token") {
         None => None,
         Some(v) => Some(v.to_str().unwrap_or("")),
@@ -164,7 +197,11 @@ async fn list_traces(
         }
     }
     summaries.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.key.cmp(&a.key)));
-    json_response(200, serde_json::to_value(summaries)?)
+    json_response_with_cache(
+        200,
+        serde_json::to_value(summaries)?,
+        upstream_save::view::cache_control(access),
+    )
 }
 
 const MAX_CONCURRENT_GETS: usize = 16;
@@ -185,7 +222,7 @@ async fn get_trace(
     let mut value = serde_json::to_value(trace)?;
     value["key"] = serde_json::json!(r);
     value["public"] = serde_json::json!(public);
-    json_response(200, value)
+    json_response_with_cache(200, value, upstream_save::view::cache_control(access))
 }
 
 async fn set_public(

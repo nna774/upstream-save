@@ -8,6 +8,12 @@ variable "project" {
   default = "upstream-save"
 }
 
+variable "viewer_domain" {
+  description = "ビューワを公開するホスト名。DNSは別のrepoで管理していて、ACMの検証レコードとCNAMEを手で足す"
+  type        = string
+  default     = "upstream-save.dark-kuins.net"
+}
+
 variable "client_token_hashes" {
   description = "クライアント名からトークンのSHA-256 hexへの対応。tools/new-token.shで生成する"
   type        = map(string)

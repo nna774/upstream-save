@@ -220,7 +220,7 @@ async function renderTrace(main, key) {
           const res = await api(`/api/traces/${key}/public`, { method: t.public ? 'DELETE' : 'PUT' });
           t.public = res.public;
           summaries = null;
-          update();
+          update(true);
         } catch (e) {
           status.textContent = e.message;
         } finally {
@@ -228,11 +228,18 @@ async function renderTrace(main, key) {
         }
       },
     });
-    const update = () => {
+    // トークン無しの応答はCloudFrontに1日残る
+    const update = (toggled) => {
       button.textContent = t.public ? '非公開にする' : '公開する';
-      status.textContent = t.public ? 'トークン無しでも見える' : '閲覧用トークンでだけ見える';
+      if (!toggled) {
+        status.textContent = t.public ? 'トークン無しでも見える' : '閲覧用トークンでだけ見える';
+      } else if (t.public) {
+        status.textContent = 'トークン無しでも見える。トークン無しの一覧に載るのは最大1日後';
+      } else {
+        status.textContent = '非公開にした。invalidation するまで、トークン無しでも見える';
+      }
     };
-    update();
+    update(false);
     main.append(el('p', {}, button, ' ', status));
   } else if (t.public) {
     main.append(el('p', {}, el('span', { class: 'badge' }, '公開')));
