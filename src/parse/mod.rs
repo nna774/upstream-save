@@ -61,11 +61,20 @@ pub fn parse_responder(tokens: &[&str]) -> Option<(Option<std::net::IpAddr>, Opt
         [_, paren] if paren.starts_with('(') => split_host(&tokens.join(" ")),
         _ => return None,
     };
-    match (&ip, &host) {
-        (None, Some(name)) if !looks_like_hostname(name) => None,
-        (Some(_), Some(name)) if !looks_like_hostname(name) => None,
-        _ => Some((ip, host)),
+    match (ip, host) {
+        (None, Some(name)) if !looks_like_hostname(&name) => None,
+        // 逆引きの無いhopを`2001:db8::1 (2001:db8::1)`と出すtracerouteがある
+        (Some(ip), Some(name)) if name.parse::<std::net::IpAddr>().is_ok() => {
+            Some((Some(ip), None))
+        }
+        (Some(_), Some(name)) if !looks_like_hostname(&name) => None,
+        (ip, host) => Some((ip, host)),
     }
+}
+
+/// `AS2516`の形を読む。`AS???`等は`None`
+pub fn parse_asn(s: &str) -> Option<u32> {
+    s.strip_prefix("AS")?.parse().ok()
 }
 
 // ドットを含まない名前も逆引きとしてはありうるが、無関係な文章の単語と区別できないので受け付けない
@@ -122,6 +131,11 @@ mod tests {
         assert!(crate::parse::parse_responder(&["unrelated"]).is_none());
         assert!(crate::parse::parse_responder(&["Start:"]).is_none());
         assert!(crate::parse::parse_responder(&["a.example", "(1.1.1.1)"]).is_some());
+        assert_eq!(
+            crate::parse::parse_responder(&["2001:db8::1", "(2001:db8::1)"]),
+            Some((Some("2001:db8::1".parse().unwrap()), None))
+        );
+        assert!(crate::parse::parse_responder(&["_gateway", "(10.0.0.1)"]).is_none());
     }
 
     #[test]

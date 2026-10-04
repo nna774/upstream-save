@@ -62,9 +62,7 @@ fn parse_continuation(hop: u32, rest: &str) -> Option<crate::model::Hop> {
 
 fn split_asn<'a, 'b>(tokens: &'a [&'b str]) -> (Option<u32>, &'a [&'b str]) {
     match tokens.split_first() {
-        Some((first, rest)) if first.starts_with("AS") => {
-            (crate::parse::mtr_json::parse_asn(first), rest)
-        }
+        Some((first, rest)) if first.starts_with("AS") => (crate::parse::parse_asn(first), rest),
         _ => (None, tokens),
     }
 }

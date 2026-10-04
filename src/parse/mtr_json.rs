@@ -44,12 +44,15 @@ pub fn parse(body: &str) -> Result<crate::model::Parsed, crate::parse::Error> {
         .hubs
         .into_iter()
         .map(|h| {
-            let (ip, host) = crate::parse::split_host(&h.host);
-            crate::model::Hop {
+            let bad = || crate::parse::Error::BadLine(format!("count={} host={}", h.count, h.host));
+            crate::parse::parse_hop_number(&h.count.to_string()).ok_or_else(bad)?;
+            let tokens: Vec<&str> = h.host.split_whitespace().collect();
+            let (ip, host) = crate::parse::parse_responder(&tokens).ok_or_else(bad)?;
+            Ok(crate::model::Hop {
                 hop: h.count,
                 ip,
                 host,
-                asn_reported: h.asn.as_deref().and_then(parse_asn),
+                asn_reported: h.asn.as_deref().and_then(crate::parse::parse_asn),
                 stats: Some(crate::model::Stats {
                     loss: h.loss,
                     snt: h.snt,
@@ -60,18 +63,14 @@ pub fn parse(body: &str) -> Result<crate::model::Parsed, crate::parse::Error> {
                     stdev: h.stdev,
                 }),
                 ..Default::default()
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, crate::parse::Error>>()?;
     Ok(crate::model::Parsed {
         format: crate::model::Format::MtrJson,
         target: root.report.mtr.dst,
         hops,
     })
-}
-
-pub(crate) fn parse_asn(s: &str) -> Option<u32> {
-    s.strip_prefix("AS")?.parse().ok()
 }
 
 #[cfg(test)]
@@ -101,6 +100,19 @@ mod tests {
         assert_eq!(last.hop, 16);
         assert_eq!(last.ip, Some("1.1.1.1".parse().unwrap()));
         assert_eq!(last.host.as_deref(), Some("one.one.one.one"));
+    }
+
+    #[test]
+    fn invalid_hub_is_error() {
+        let hub = |count: u32, host: &str| {
+            format!(
+                r#"{{"report":{{"mtr":{{"dst":"x"}},"hubs":[{{"count":{count},"host":"{host}","Loss%":0.0,"Snt":1,"Last":1.0,"Avg":1.0,"Best":1.0,"Wrst":1.0,"StDev":0.0}}]}}}}"#
+            )
+        };
+        assert!(crate::parse::mtr_json::parse(&hub(1, "1.1.1.1")).is_ok());
+        assert!(crate::parse::mtr_json::parse(&hub(0, "1.1.1.1")).is_err());
+        assert!(crate::parse::mtr_json::parse(&hub(256, "1.1.1.1")).is_err());
+        assert!(crate::parse::mtr_json::parse(&hub(1, "unrelated words")).is_err());
     }
 
     #[test]
