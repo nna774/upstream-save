@@ -293,7 +293,8 @@ async function renderCompare(main) {
   const all = await getSummaries();
   const groups = new Map();
   for (const s of all) {
-    const g = `${s.label ?? '(label なし)'} / ${afText(s.af) || 'af 不明'}`;
+    // 表示用の文字列をキーにすると、labelが実際に「(label なし)」の記録と混ざる
+    const g = JSON.stringify([s.label ?? null, s.af ?? null]);
     if (!groups.has(g)) groups.set(g, new Map());
     const paths = groups.get(g);
     const p = s.as_path.join(' ');
@@ -306,12 +307,16 @@ async function renderCompare(main) {
     return;
   }
 
-  for (const g of [...groups.keys()].sort()) {
+  const title = (g) => {
+    const [label, af] = JSON.parse(g);
+    return `${label ?? '(label なし)'} / ${afText(af) || 'af 不明'}`;
+  };
+  for (const g of [...groups.keys()].sort((a, b) => title(a).localeCompare(title(b)))) {
     // summariesはtsの降順なので、items[0]が最新でitems.at(-1)が最古
     const paths = [...groups.get(g).values()].sort((a, b) =>
       b.items.length - a.items.length || b.items[0].ts.localeCompare(a.items[0].ts));
     main.append(el('div', { class: 'group' },
-      el('h2', {}, g),
+      el('h2', {}, title(g)),
       table(
         [['AS path'], ['件数', 'num'], ['初出'], ['最終']],
         paths.map((p) => el('tr', {},
