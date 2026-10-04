@@ -1,6 +1,8 @@
 const RIPESTAT_URL: &str = "https://stat.ripe.net/data/prefix-overview/data.json";
 // RIPEstatは同じ送信元からの同時リクエストを8件までに制限している
 const MAX_CONCURRENT_LOOKUPS: usize = 4;
+// Lambdaのtimeout(30秒)内にS3への保存を終えられるよう、補完全体を打ち切る
+const LOOKUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15);
 
 // IANA Special-Purpose Address RegistryでGlobally Reachableでない範囲。192.0.0.9等の例外は無視して範囲ごと除く
 const NON_GLOBAL_V4: &[(u32, u8)] = &[
@@ -12,24 +14,26 @@ const NON_GLOBAL_V4: &[(u32, u8)] = &[
     (0xac10_0000, 12), // 172.16.0.0/12
     (0xc000_0000, 24), // 192.0.0.0/24
     (0xc000_0200, 24), // 192.0.2.0/24
+    (0xc058_6302, 32), // 192.88.99.2/32
     (0xc0a8_0000, 16), // 192.168.0.0/16
     (0xc612_0000, 15), // 198.18.0.0/15
     (0xc633_6400, 24), // 198.51.100.0/24
     (0xcb00_7100, 24), // 203.0.113.0/24
-    (0xe000_0000, 3),  // 224.0.0.0/4 multicast, 240.0.0.0/4
+    (0xe000_0000, 3),  // 224.0.0.0/3 (224.0.0.0/4と240.0.0.0/4)
 ];
 
 const NON_GLOBAL_V6: &[(u128, u8)] = &[
-    (0, 127),                     // ::/128, ::1/128
-    (0x0064_ff9b_0001 << 80, 48), // 64:ff9b:1::/48
-    (0x0100 << 112, 64),          // 100::/64
-    (0x2001 << 112, 23),          // 2001::/23
-    (0x2001_0db8 << 96, 32),      // 2001:db8::/32
-    (0x3fff << 112, 20),          // 3fff::/20
-    (0x5f00 << 112, 16),          // 5f00::/16
-    (0xfc00 << 112, 7),           // fc00::/7
-    (0xfe80 << 112, 10),          // fe80::/10
-    (0xff00 << 112, 8),           // ff00::/8
+    (0, 127),                          // ::/128, ::1/128
+    (0x0064_ff9b_0001 << 80, 48),      // 64:ff9b:1::/48
+    (0x0100 << 112, 64),               // 100::/64
+    ((0x0100 << 112) | (1 << 64), 64), // 100:0:0:1::/64
+    (0x2001 << 112, 23),               // 2001::/23
+    (0x2001_0db8 << 96, 32),           // 2001:db8::/32
+    (0x3fff << 112, 20),               // 3fff::/20
+    (0x5f00 << 112, 16),               // 5f00::/16
+    (0xfc00 << 112, 7),                // fc00::/7
+    (0xfe80 << 112, 10),               // fe80::/10
+    (0xff00 << 112, 8),                // ff00::/8
 ];
 
 fn in_prefixes<T>(addr: T, prefixes: &[(T, u8)]) -> bool
@@ -119,7 +123,7 @@ impl Client {
         Ok(parse_prefix_overview(&body)?)
     }
 
-    /// グローバルなアドレスだけを並列に引く。失敗したアドレスは結果から外す
+    /// グローバルなアドレスだけを並列に引く。失敗したアドレスと期限までに終わらなかったアドレスは結果から外す
     pub async fn lookup_all(
         &self,
         ips: impl IntoIterator<Item = std::net::IpAddr>,
@@ -127,11 +131,21 @@ impl Client {
         use futures::StreamExt as _;
         let unique: std::collections::HashSet<std::net::IpAddr> =
             ips.into_iter().filter(|ip| is_global(*ip)).collect();
-        let results: Vec<_> = futures::stream::iter(unique)
+        let deadline = tokio::time::Instant::now() + LOOKUP_DEADLINE;
+        let mut stream = futures::stream::iter(unique)
             .map(|ip| async move { (ip, self.lookup(ip).await) })
-            .buffer_unordered(MAX_CONCURRENT_LOOKUPS)
-            .collect()
-            .await;
+            .buffer_unordered(MAX_CONCURRENT_LOOKUPS);
+        let mut results = Vec::new();
+        loop {
+            match tokio::time::timeout_at(deadline, stream.next()).await {
+                Ok(Some(r)) => results.push(r),
+                Ok(None) => break,
+                Err(_) => {
+                    tracing::warn!("RIPEstat lookups hit the deadline");
+                    break;
+                }
+            }
+        }
         results
             .into_iter()
             .filter_map(|(ip, r)| match r {
