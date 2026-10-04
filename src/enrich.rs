@@ -103,7 +103,8 @@ impl Client {
 
     pub fn with_url(url: &str) -> Self {
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
+            // キャッシュされていない問い合わせへのRIPEstatの応答は、5秒を超えることがある
+            .timeout(std::time::Duration::from_secs(8))
             .build()
             .expect("reqwest client");
         Self {
@@ -139,7 +140,7 @@ impl Client {
         match self.lookup(ip).await {
             Ok(r) => Ok(r),
             Err(e) => {
-                tracing::warn!(%ip, error = %e, "RIPEstat lookup failed, retrying");
+                tracing::warn!(%ip, error = ?e, "RIPEstat lookup failed, retrying");
                 self.lookup(ip).await
             }
         }
@@ -166,7 +167,7 @@ impl Client {
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            tracing::warn!(%ip, error = %e, "RIPEstat lookup failed");
+                            tracing::warn!(%ip, error = ?e, "RIPEstat lookup failed");
                             lookups.failed.push(ip);
                         }
                     }
