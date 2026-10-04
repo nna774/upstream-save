@@ -16,6 +16,9 @@ impl Tokens {
 
     pub fn authenticate(&self, token: &str) -> Option<&str> {
         use sha2::Digest as _;
+        if token.is_empty() {
+            return None;
+        }
         let hash = hex::encode(sha2::Sha256::digest(token.as_bytes()));
         self.name_by_hash.get(&hash).map(String::as_str)
     }
@@ -32,6 +35,16 @@ mod tests {
         .unwrap();
         assert_eq!(t.authenticate("secret"), Some("mbp"));
         assert_eq!(t.authenticate("wrong"), None);
+        assert_eq!(t.authenticate(""), None);
+    }
+
+    #[test]
+    fn empty_token_never_matches() {
+        // sha256("")
+        let t = crate::auth::Tokens::from_json(
+            r#"{"empty":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}"#,
+        )
+        .unwrap();
         assert_eq!(t.authenticate(""), None);
     }
 }
