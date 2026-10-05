@@ -48,6 +48,7 @@ nav a.current { font-weight: bold; text-decoration: none; }
 #auth { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.9rem; }
 #auth input { width: 12em; min-width: 0; flex: 1 1 8em; }
 main { padding: 16px; max-width: 1200px; margin: 0 auto; }
+main.wide { max-width: 1600px; }
 h2 { font-size: 1.05rem; margin: 20px 0 8px; }
 input, select, button { font: inherit; color: inherit; }
 input, select { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; }
@@ -62,6 +63,7 @@ th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line
 th { font-weight: 600; color: var(--muted); font-size: 0.85rem; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.wrap { white-space: normal; min-width: 14em; }
+td.host { white-space: normal; overflow-wrap: anywhere; max-width: 20em; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
 .path { display: inline-flex; flex-wrap: wrap; gap: 2px 4px; }
 .path .sep { color: var(--muted); }
