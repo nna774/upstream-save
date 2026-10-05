@@ -332,7 +332,11 @@ async function renderCompare(main) {
 
 function renderAuth() {
   document.getElementById('auth-status').textContent = token ? '閲覧用トークンで表示中' : '公開分を表示中';
-  document.getElementById('token').value = '';
+  // password欄が見えているとパスワードマネージャーが反応するので、トークンを持っている間は出さない
+  const input = document.getElementById('token');
+  input.value = '';
+  input.hidden = !!token;
+  document.getElementById('token-save').hidden = !!token;
   document.getElementById('token-clear').hidden = !token;
 }
 
