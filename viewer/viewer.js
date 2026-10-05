@@ -189,6 +189,7 @@ async function renderList(main) {
 
 async function renderTrace(main, key) {
   const t = await api(`/api/traces/${key}`);
+  main.classList.add('wide');
 
   const rows = [
     ['日時', formatTs(t.ts)],
@@ -261,7 +262,7 @@ async function renderTrace(main, key) {
     const cells = [
       el('td', { class: 'num' }, same ? '' : h.hop),
       el('td', { class: 'mono' }, h.ip ?? '*'),
-      el('td', { class: 'mono' }, h.host ?? ''),
+      el('td', { class: 'mono host' }, h.host ?? ''),
       el('td', {}, asnLink(asn)),
       el('td', { class: 'wrap' }, h.holder ?? ''),
       el('td', { class: 'mono' }, h.prefix ?? ''),
